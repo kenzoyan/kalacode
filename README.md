@@ -70,7 +70,7 @@ OPENAI_MODEL=gpt-4
 Example with real Azure endpoint:
 ```env
 OPENAI_API_KEY=abc123def456
-OPENAI_BASE_URL=https://davor-m7akznfa-eastus2.cognitiveservices.azure.com/openai/v1/
+OPENAI_BASE_URL=https://your-resource.cognitiveservices.azure.com/openai/v1/
 OPENAI_MODEL=gpt-5.1
 ```
 
@@ -162,15 +162,15 @@ class MyTool(Tool):
     @property
     def name(self) -> str:
         return "my_tool"
-    
+
     @property
     def description(self) -> str:
         return "Description of what my tool does"
-    
+
     @property
     def parameters(self) -> Dict[str, str]:
         return {"param1": "string", "param2": "number?"}
-    
+
     def execute(self, args: Dict[str, Any]) -> str:
         # Your implementation
         return "result"
