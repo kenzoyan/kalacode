@@ -53,6 +53,7 @@ class LLMClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         max_completion_tokens: int = 4096,
         temperature: float = 0.7,
+        stream: bool = True,
     ) -> Dict[str, Any]:
         """
         Make a chat completion request.
@@ -62,22 +63,29 @@ class LLMClient:
             tools: Optional list of tool schemas in OpenAI format
             max_completion_tokens: Maximum tokens in response
             temperature: Sampling temperature
+            stream: Whether to stream the response
 
         Returns:
-            Response dict from the API
+            Response dict from the API (or generator if streaming)
         """
         kwargs = {
             "model": self.model,
             "messages": messages,
             "max_completion_tokens": max_completion_tokens,
             "temperature": temperature,
+            "stream": stream,
         }
 
         if tools:
             kwargs["tools"] = tools
 
-        response = self.client.chat.completions.create(**kwargs)
-        return self._parse_response(response)
+        if stream:
+            # Return streaming generator
+            return self.client.chat.completions.create(**kwargs)
+        else:
+            # Return parsed response
+            response = self.client.chat.completions.create(**kwargs)
+            return self._parse_response(response)
 
     def _parse_response(self, response) -> Dict[str, Any]:
         """Parse the API response into a consistent format."""

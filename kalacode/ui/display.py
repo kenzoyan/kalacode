@@ -2,6 +2,8 @@
 
 import os
 import re
+import sys
+import time
 
 
 class Colors:
@@ -15,6 +17,7 @@ class Colors:
     GREEN = "\033[32m"
     YELLOW = "\033[33m"
     RED = "\033[31m"
+    MAGENTA = "\033[35m"
 
 
 class Display:
@@ -28,9 +31,37 @@ class Display:
         """Return a Colors class with empty strings (no colors)."""
 
         class NoColors:
-            RESET = BOLD = DIM = BLUE = CYAN = GREEN = YELLOW = RED = ""
+            RESET = BOLD = DIM = BLUE = CYAN = GREEN = YELLOW = RED = MAGENTA = ""
 
         return NoColors()
+
+    def show_landing_page(self, model: str, provider: str) -> None:
+        """Display ASCII logo and welcome message."""
+        logo = f"""
+{self.colors.CYAN}{self.colors.BOLD}
+    #  #    #    #         #    ###   ###  ####  ####
+    # #    # #   #        # #   #  # #   # #  # #
+    ##    #   #  #       #   #  #    #   # #  # ###
+    # #   #####  #       #####  #    #   # #  # #
+    #  #  #   #  #####  #     # ####  ###  ####  ####
+{self.colors.RESET}
+{self.colors.DIM}              A minimal coding agent{self.colors.RESET}
+        """
+        print(logo)
+
+        # Model info
+        print(f"{self.colors.DIM}+{'-' * 58}+{self.colors.RESET}")
+        print(
+            f"{self.colors.DIM}|{self.colors.RESET} {self.colors.BOLD}Model:{self.colors.RESET}    {self.colors.GREEN}{model}{self.colors.RESET}"
+        )
+        print(
+            f"{self.colors.DIM}|{self.colors.RESET} {self.colors.BOLD}Working:{self.colors.RESET}  {self.colors.YELLOW}{os.getcwd()}{self.colors.RESET}"
+        )
+        print(f"{self.colors.DIM}+{'-' * 58}+{self.colors.RESET}")
+
+        # Tips
+        print(f"\n{self.colors.DIM}Commands: /c (clear) | /q (quit){self.colors.RESET}")
+        print()
 
     def separator(self) -> str:
         """Get a terminal-width separator line."""
@@ -62,13 +93,19 @@ class Display:
             flush=True,
         )
 
-    def message(self, text: str, prefix: str = "⏺", color: str = None) -> None:
+    def message(self, text: str, prefix: str = "⏺", color: str | None = None) -> None:
         """Print a message with optional color."""
         color_code = (
             getattr(self.colors, color.upper(), "") if color else self.colors.CYAN
         )
         formatted_text = self.render_markdown(text)
         print(f"\n{color_code}{prefix}{self.colors.RESET} {formatted_text}")
+
+    def stream_text(self, text: str, prefix: str = "", end: str = "") -> None:
+        """Stream text character by character (for streaming responses)."""
+        if prefix:
+            print(prefix, end="", flush=True)
+        print(text, end=end, flush=True)
 
     def tool_call(self, tool_name: str, arg_preview: str) -> None:
         """Print a tool call notification."""

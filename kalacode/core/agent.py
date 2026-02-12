@@ -45,29 +45,83 @@ class Agent:
         while iteration < max_iterations:
             iteration += 1
 
-            # Get response from LLM
-            response = self.llm.chat_completion(
+            # Get response from LLM with streaming
+            stream = self.llm.chat_completion(
                 messages=self.messages,
                 tools=self.tools.to_openai_schemas(),
+                stream=True,
             )
 
-            # Handle text content
-            if response["content"]:
-                self.display.message(response["content"])
+            # Process streaming response
+            full_content = ""
+            tool_calls = []
+            current_tool_call = None
 
-            # Handle tool calls
-            tool_calls = response.get("tool_calls", [])
+            # Show streaming prefix
+            print(
+                f"\n{self.display.colors.CYAN}⏺{self.display.colors.RESET} ",
+                end="",
+                flush=True,
+            )
+
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+
+                delta = chunk.choices[0].delta
+
+                # Stream text content
+                if delta.content:
+                    self.display.stream_text(delta.content)
+                    full_content += delta.content
+
+                # Collect tool calls
+                if hasattr(delta, "tool_calls") and delta.tool_calls:
+                    for tc_chunk in delta.tool_calls:
+                        if tc_chunk.index is not None:
+                            # New tool call
+                            if (
+                                current_tool_call is None
+                                or tc_chunk.index != current_tool_call.get("index")
+                            ):
+                                if current_tool_call is not None:
+                                    tool_calls.append(current_tool_call)
+                                current_tool_call = {
+                                    "index": tc_chunk.index,
+                                    "id": tc_chunk.id or "",
+                                    "type": tc_chunk.type or "function",
+                                    "function": {
+                                        "name": tc_chunk.function.name or "",
+                                        "arguments": tc_chunk.function.arguments or "",
+                                    },
+                                }
+                            else:
+                                # Continue existing tool call
+                                if tc_chunk.function.name:
+                                    current_tool_call["function"]["name"] += (
+                                        tc_chunk.function.name
+                                    )
+                                if tc_chunk.function.arguments:
+                                    current_tool_call["function"]["arguments"] += (
+                                        tc_chunk.function.arguments
+                                    )
+
+            # Add last tool call if exists
+            if current_tool_call is not None:
+                tool_calls.append(current_tool_call)
+
+            print()  # Newline after streaming
+
+            # Check for tool calls
             if not tool_calls:
                 # No more tool calls, conversation turn complete
-                self.messages.append(
-                    {"role": "assistant", "content": response["content"]}
-                )
+                self.messages.append({"role": "assistant", "content": full_content})
                 break
 
             # Add assistant message with tool calls
             assistant_message = {
                 "role": "assistant",
-                "content": response["content"],
+                "content": full_content,
                 "tool_calls": [],
             }
 
@@ -131,13 +185,9 @@ class AgentRunner:
 
     def run(self) -> None:
         """Run the main REPL loop."""
-        # Print header
+        # Show landing page with ASCII logo
         provider_info = "azure" if self.agent.llm.base_url else "openai"
-        self.display.header(
-            "kalacode",
-            f"{self.agent.llm.model} ({provider_info}) | {os.getcwd()}",
-        )
-        print()
+        self.display.show_landing_page(self.agent.llm.model, provider_info)
 
         while True:
             try:
