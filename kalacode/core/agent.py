@@ -5,6 +5,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from ..core import LLMClient
+from ..memory import MemoryConfig, ShortTermMemory
 from ..tools import ToolRegistry
 from ..ui import Display
 
@@ -18,12 +19,25 @@ class Agent:
         tool_registry: ToolRegistry,
         display: Display,
         system_prompt: Optional[str] = None,
+        memory_config: Optional[MemoryConfig] = None,
     ):
         self.llm = llm_client
         self.tools = tool_registry
         self.display = display
-        self.messages: List[Dict[str, Any]] = []
         self.system_prompt = system_prompt or self._default_system_prompt()
+
+        # Initialize short-term memory
+        self.memory_config = memory_config or MemoryConfig.from_env()
+        if self.memory_config.enable_stm:
+            self.stm = ShortTermMemory(
+                max_tokens=self.memory_config.max_context_tokens,
+                max_messages=self.memory_config.max_recent_messages,
+            )
+        else:
+            self.stm = None
+
+        # Keep messages list for backward compatibility
+        self.messages: List[Dict[str, Any]] = []
 
     def _default_system_prompt(self) -> str:
         """Get default system prompt."""
@@ -32,11 +46,31 @@ class Agent:
     def reset_conversation(self) -> None:
         """Clear conversation history."""
         self.messages = []
+        if self.stm:
+            self.stm.clear()
+
+    def get_memory_stats(self) -> Optional[Dict[str, Any]]:
+        """Get short-term memory statistics."""
+        if self.stm:
+            return self.stm.get_stats()
+        return None
+
+    def _get_context_messages(self) -> List[Dict[str, Any]]:
+        """Get messages for API call (uses STM if enabled, otherwise full history)."""
+        if self.stm:
+            return self.stm.get_messages()
+        return self.messages
+
+    def _add_to_memory(self, message: Dict[str, Any]) -> None:
+        """Add message to memory (both STM and messages list)."""
+        self.messages.append(message)
+        if self.stm:
+            self.stm.add_message(message)
 
     def process_user_input(self, user_input: str) -> None:
         """Process user input and run agentic loop."""
         # Add user message
-        self.messages.append({"role": "user", "content": user_input})
+        self._add_to_memory({"role": "user", "content": user_input})
 
         # Agentic loop: keep calling API until no more tool calls
         max_iterations = 10
@@ -46,8 +80,10 @@ class Agent:
             iteration += 1
 
             # Get response from LLM with streaming
+            # Use STM context if available, otherwise use full messages
+            context_messages = self._get_context_messages()
             stream = self.llm.chat_completion(
-                messages=self.messages,
+                messages=context_messages,
                 tools=self.tools.to_openai_schemas(),
                 stream=True,
             )
@@ -115,7 +151,7 @@ class Agent:
             # Check for tool calls
             if not tool_calls:
                 # No more tool calls, conversation turn complete
-                self.messages.append({"role": "assistant", "content": full_content})
+                self._add_to_memory({"role": "assistant", "content": full_content})
                 break
 
             # Add assistant message with tool calls
@@ -169,8 +205,9 @@ class Agent:
                 )
 
             # Add assistant message and tool results to conversation
-            self.messages.append(assistant_message)
-            self.messages.extend(tool_results)
+            self._add_to_memory(assistant_message)
+            for tool_result in tool_results:
+                self._add_to_memory(tool_result)
 
         if iteration >= max_iterations:
             self.display.error("Max iterations reached")
@@ -189,6 +226,16 @@ class AgentRunner:
         provider_info = "azure" if self.agent.llm.base_url else "openai"
         self.display.show_landing_page(self.agent.llm.model, provider_info)
 
+        # Show memory info if STM is enabled
+        if self.agent.stm:
+            stats = self.agent.get_memory_stats()
+            if stats:
+                self.display.info(
+                    f"Short-term memory: {stats['utilization']['messages']}, "
+                    f"{stats['utilization']['tokens']}",
+                    color="cyan",
+                )
+
         while True:
             try:
                 self.display.user_prompt()
@@ -205,6 +252,18 @@ class AgentRunner:
                 if user_input == "/c":
                     self.agent.reset_conversation()
                     self.display.info("Cleared conversation")
+                    continue
+
+                if user_input == "/stats":
+                    stats = self.agent.get_memory_stats()
+                    if stats:
+                        self.display.info(
+                            f"Memory: {stats['message_count']} messages, "
+                            f"{stats['token_count']} tokens "
+                            f"(max: {stats['max_messages']} msgs, {stats['max_tokens']} tokens)"
+                        )
+                    else:
+                        self.display.info("Short-term memory disabled")
                     continue
 
                 # Process user input

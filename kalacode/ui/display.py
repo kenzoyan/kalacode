@@ -60,7 +60,7 @@ class Display:
         print(f"{self.colors.DIM}+{'-' * 58}+{self.colors.RESET}")
 
         # Tips
-        print(f"\n{self.colors.DIM}Commands: /c (clear) | /q (quit){self.colors.RESET}")
+        print(f"\n{self.colors.DIM}Commands: /c (clear) | /q (quit) | /stats {self.colors.RESET}")
         print()
 
     def separator(self) -> str:
