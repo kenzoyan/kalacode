@@ -6,10 +6,12 @@ A minimal, well-organized coding agent with Azure OpenAI support - inspired by n
 
 - Clean, modular architecture
 - OpenAI SDK with Azure OpenAI support
+- ReAct-style tool-using loop (Think -> Act -> Observe -> Respond)
 - File manipulation tools (read, write, edit)
 - Search capabilities (glob, grep)
 - Shell command execution
 - Interactive REPL interface
+- Friendly slash commands with help and Tab completion
 - Colored terminal output
 
 ## Project Structure
@@ -103,9 +105,11 @@ kalacode
 
 ### Available commands:
 
+- `/help` or `/commands` - Show available commands
 - `/q` or `/quit` or `exit` - Exit the application
 - `/c` - Clear conversation history
 - `/stats` - Show short-term memory stats
+- `/memory` - Show memory subcommands
 - `/memory show` - Display long-term memory markdown file
 - `/memory clear` - Reset long-term memory markdown file
 
