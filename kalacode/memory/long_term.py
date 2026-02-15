@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 
 
 @dataclass
@@ -32,7 +33,8 @@ class LongTermMemory:
         """Base markdown schema used for initialization and clear."""
         return (
             "# Kalacode Long-Term Memory\n\n"
-            "This file stores persistent memory across sessions.\n\n"
+            "This file stores persistent memory across sessions.\n"
+            "Only durable facts, preferences, and decisions are kept.\n\n"
             "## Notes\n"
         )
 
@@ -61,17 +63,139 @@ class LongTermMemory:
         return text[-self.max_summary_chars :]
 
     def append_turn(self, user_text: str, assistant_text: str) -> None:
-        """Append a concise conversation note as markdown bullet entries."""
+        """Append only durable memory items extracted from a conversation turn."""
+        items = self._extract_durable_items(user_text=user_text, assistant_text=assistant_text)
+        if not items:
+            return
+
+        existing = self._existing_item_set()
+        unique_items = [(kind, text) for kind, text in items if self._item_key(kind, text) not in existing]
+        if not unique_items:
+            return
+
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
-        user_line = self._one_line(user_text, 200)
-        assistant_line = self._one_line(assistant_text, 300)
-        entry = (
-            f"\n### {ts}\n"
-            f"- User: {user_line}\n"
-            f"- Assistant: {assistant_line}\n"
-        )
+        lines = [f"\n### {ts}"]
+        for kind, text in unique_items:
+            lines.append(f"- [{kind}] {text}")
+        entry = "\n".join(lines) + "\n"
         self.file_path.write_text(self.read() + entry, encoding="utf-8")
         self._trim_entries()
+
+    def _extract_durable_items(self, user_text: str, assistant_text: str) -> list[tuple[str, str]]:
+        """
+        Extract durable memory from turn content.
+
+        Returns list of (KIND, text) where KIND is FACT/PREFERENCE/DECISION.
+        """
+        items: list[tuple[str, str]] = []
+        for sentence in self._split_sentences(user_text):
+            kind = self._classify_sentence(sentence, source="user")
+            if kind:
+                items.append((kind, self._one_line(sentence, 220)))
+
+        # Assistant content is noisier; keep only explicit decision-like statements.
+        for sentence in self._split_sentences(assistant_text):
+            kind = self._classify_sentence(sentence, source="assistant")
+            if kind == "DECISION":
+                items.append((kind, self._one_line(sentence, 220)))
+
+        return items[:8]
+
+    def _classify_sentence(self, text: str, source: str) -> str | None:
+        """Classify sentence into durable memory category or None."""
+        normalized = " ".join(text.split())
+        lowered = normalized.lower()
+
+        if self._is_transient(normalized):
+            return None
+
+        decision_patterns = (
+            "first work on ",
+            "we will ",
+            "let's ",
+            "decided ",
+            "decision ",
+            "selected ",
+            "choose ",
+            "chosen ",
+        )
+        if any(pat in lowered for pat in decision_patterns):
+            return "DECISION"
+
+        # Assistant output is noisy for facts/preferences; keep only explicit decisions.
+        if source == "assistant":
+            return None
+
+        preference_patterns = (
+            "i prefer ",
+            "i want ",
+            "i'd like ",
+            "please ",
+            "don't use ",
+            "do not use ",
+            "always ",
+            "never ",
+            "use python ",
+            "use ",
+        )
+        if any(pat in lowered for pat in preference_patterns):
+            return "PREFERENCE"
+
+        fact_patterns = (
+            "my name is ",
+            "i am ",
+            "i'm ",
+            "repo is ",
+            "project is ",
+            "python 3.",
+            "python 3.1",
+        )
+        if source == "user" and any(pat in lowered for pat in fact_patterns):
+            return "FACT"
+
+        return None
+
+    @staticmethod
+    def _split_sentences(text: str) -> list[str]:
+        """Split text into sentence-like chunks."""
+        cleaned = (text or "").replace("\r", "\n")
+        pieces = re.split(r"[\n]+|(?<=[.!?])\s+", cleaned)
+        out = []
+        for piece in pieces:
+            s = piece.strip().strip("-*")
+            if s:
+                out.append(s)
+        return out
+
+    @staticmethod
+    def _is_transient(text: str) -> bool:
+        """Heuristic filter for non-durable content."""
+        lowered = text.lower()
+        transient_markers = (
+            "?",
+            "error:",
+            "traceback",
+            "http://",
+            "https://",
+            "`",
+            "pip install",
+            "running ",
+            "done",
+            "thanks",
+        )
+        if len(lowered) < 12:
+            return True
+        return any(marker in lowered for marker in transient_markers)
+
+    def _existing_item_set(self) -> set[str]:
+        """Load normalized keys of already-stored items to avoid duplicates."""
+        text = self.read()
+        matches = re.findall(r"^- \[(FACT|PREFERENCE|DECISION)\] (.+)$", text, re.MULTILINE)
+        return {self._item_key(kind, item) for kind, item in matches}
+
+    @staticmethod
+    def _item_key(kind: str, text: str) -> str:
+        return f"{kind}:{' '.join(text.lower().split())}"
 
     def _trim_entries(self) -> None:
         """Trim oldest note blocks when entry count exceeds configured limit."""
