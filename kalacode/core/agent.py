@@ -5,7 +5,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from ..core import LLMClient
-from ..memory import MemoryConfig, ShortTermMemory
+from ..memory import LongTermMemory, MemoryConfig, ShortTermMemory
 from ..tools import ToolRegistry
 from ..ui import Display
 
@@ -35,6 +35,14 @@ class Agent:
             )
         else:
             self.stm = None
+        if self.memory_config.enable_ltm:
+            self.ltm = LongTermMemory(
+                file_path=self.memory_config.ltm_file_path,
+                max_summary_chars=self.memory_config.ltm_max_summary_chars,
+                max_entries=self.memory_config.ltm_max_entries,
+            )
+        else:
+            self.ltm = None
 
         # Keep messages list for backward compatibility
         self.messages: List[Dict[str, Any]] = []
@@ -61,11 +69,35 @@ class Agent:
             return self.stm.get_messages()
         return self.messages
 
+    def _build_system_prompt(self) -> str:
+        """Build dynamic system prompt including long-term memory summary."""
+        prompt = self.system_prompt
+        if self.ltm:
+            ltm_summary = self.ltm.get_summary()
+            if ltm_summary:
+                prompt += (
+                    "\n\nLong-term memory (markdown summary, may be partial):\n"
+                    f"{ltm_summary}"
+                )
+        return prompt
+
+    def _build_api_messages(self) -> List[Dict[str, Any]]:
+        """Compose messages sent to the LLM."""
+        return [{"role": "system", "content": self._build_system_prompt()}] + self._get_context_messages()
+
     def _add_to_memory(self, message: Dict[str, Any]) -> None:
         """Add message to memory (both STM and messages list)."""
         self.messages.append(message)
         if self.stm:
             self.stm.add_message(message)
+
+    def _append_to_ltm(self, user_input: str, assistant_output: str) -> None:
+        """Persist completed turn to long-term markdown memory."""
+        if not self.ltm:
+            return
+        if not assistant_output.strip():
+            return
+        self.ltm.append_turn(user_text=user_input, assistant_text=assistant_output)
 
     def process_user_input(self, user_input: str) -> None:
         """Process user input and run agentic loop."""
@@ -75,13 +107,14 @@ class Agent:
         # Agentic loop: keep calling API until no more tool calls
         max_iterations = 10
         iteration = 0
+        final_assistant_output = ""
 
         while iteration < max_iterations:
             iteration += 1
 
             # Get response from LLM with streaming
             # Use STM context if available, otherwise use full messages
-            context_messages = self._get_context_messages()
+            context_messages = self._build_api_messages()
             stream = self.llm.chat_completion(
                 messages=context_messages,
                 tools=self.tools.to_openai_schemas(),
@@ -152,6 +185,7 @@ class Agent:
             if not tool_calls:
                 # No more tool calls, conversation turn complete
                 self._add_to_memory({"role": "assistant", "content": full_content})
+                final_assistant_output = full_content
                 break
 
             # Add assistant message with tool calls
@@ -211,6 +245,8 @@ class Agent:
 
         if iteration >= max_iterations:
             self.display.error("Max iterations reached")
+        else:
+            self._append_to_ltm(user_input=user_input, assistant_output=final_assistant_output)
 
 
 class AgentRunner:
@@ -235,6 +271,11 @@ class AgentRunner:
                     f"{stats['utilization']['tokens']}",
                     color="cyan",
                 )
+        if self.agent.ltm:
+            self.display.info(
+                f"Long-term memory file: {self.agent.ltm.file_path}",
+                color="cyan",
+            )
 
         while True:
             try:
