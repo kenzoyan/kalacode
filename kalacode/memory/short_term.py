@@ -109,6 +109,41 @@ class ShortTermMemory:
 
         # Note: If a single message exceeds max_tokens, we still keep it
         # to avoid empty context. This is by design.
+        self._sanitize_tool_message_sequence()
+
+    def _sanitize_tool_message_sequence(self) -> None:
+        """
+        Remove invalid/orphan tool messages.
+
+        OpenAI chat requires each `role=tool` message to come after an
+        assistant message that contains a matching `tool_calls` entry.
+        Truncation can break this linkage, so we drop orphaned tool messages.
+        """
+        sanitized: List[Dict[str, Any]] = []
+        open_tool_call_ids: set[str] = set()
+
+        for message in self.messages:
+            role = message.get("role")
+
+            if role == "assistant" and message.get("tool_calls"):
+                sanitized.append(message)
+                for tool_call in message.get("tool_calls", []):
+                    tool_call_id = tool_call.get("id")
+                    if tool_call_id:
+                        open_tool_call_ids.add(tool_call_id)
+                continue
+
+            if role == "tool":
+                tool_call_id = message.get("tool_call_id")
+                if tool_call_id and tool_call_id in open_tool_call_ids:
+                    sanitized.append(message)
+                    open_tool_call_ids.remove(tool_call_id)
+                # Drop orphan tool message silently.
+                continue
+
+            sanitized.append(message)
+
+        self.messages = sanitized
 
     def get_stats(self) -> Dict[str, Any]:
         """Get memory statistics."""
