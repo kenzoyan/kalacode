@@ -49,7 +49,21 @@ class Agent:
 
     def _default_system_prompt(self) -> str:
         """Get default system prompt."""
-        return f"You are a helpful coding assistant. Current working directory: {os.getcwd()}"
+        return (
+            "You are a helpful coding assistant.\n"
+            f"Current working directory: {os.getcwd()}\n\n"
+            "Operate in ReAct style:\n"
+            "1) Think briefly about the next best step.\n"
+            "2) Act by calling a tool when needed.\n"
+            "3) Observe tool output and iterate.\n"
+            "4) Respond only when you have enough evidence.\n\n"
+            "Rules:\n"
+            "- Prefer tool calls over guessing for file/system facts.\n"
+            "- Keep user-facing reasoning concise; do not dump long internal deliberation.\n"
+            "- If a tool fails, adjust and retry with a better action.\n"
+            "- For code changes, verify with a relevant command before final response.\n"
+            "- When done, provide a direct, actionable answer."
+        )
 
     def reset_conversation(self) -> None:
         """Clear conversation history."""
