@@ -105,6 +105,9 @@ kalacode
 
 - `/q` or `/quit` or `exit` - Exit the application
 - `/c` - Clear conversation history
+- `/stats` - Show short-term memory stats
+- `/memory show` - Display long-term memory markdown file
+- `/memory clear` - Reset long-term memory markdown file
 
 ## Environment Variables
 
@@ -181,7 +184,3 @@ Register it in `kalacode/tools/__init__.py`.
 ## License
 
 MIT
-
-## Contributing
-
-Contributions welcome! Please feel free to submit a Pull Request.

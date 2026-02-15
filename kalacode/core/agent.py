@@ -307,6 +307,25 @@ class AgentRunner:
                         self.display.info("Short-term memory disabled")
                     continue
 
+                if user_input == "/memory show":
+                    if not self.agent.ltm:
+                        self.display.info("Long-term memory disabled", color="yellow")
+                        continue
+                    self.display.info(
+                        f"Long-term memory file: {self.agent.ltm.file_path}",
+                        color="cyan",
+                    )
+                    print(self.agent.ltm.read())
+                    continue
+
+                if user_input == "/memory clear":
+                    if not self.agent.ltm:
+                        self.display.info("Long-term memory disabled", color="yellow")
+                        continue
+                    self.agent.ltm.clear()
+                    self.display.info("Long-term memory cleared", color="cyan")
+                    continue
+
                 # Process user input
                 self.agent.process_user_input(user_input)
                 print()

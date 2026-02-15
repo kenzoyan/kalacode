@@ -25,12 +25,21 @@ class LongTermMemory:
             return
 
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
-        initial = (
+        self.file_path.write_text(self._initial_template(), encoding="utf-8")
+
+    @staticmethod
+    def _initial_template() -> str:
+        """Base markdown schema used for initialization and clear."""
+        return (
             "# Kalacode Long-Term Memory\n\n"
             "This file stores persistent memory across sessions.\n\n"
             "## Notes\n"
         )
-        self.file_path.write_text(initial, encoding="utf-8")
+
+    def clear(self) -> None:
+        """Reset memory file to its initial template."""
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path.write_text(self._initial_template(), encoding="utf-8")
 
     def read(self) -> str:
         """Read full markdown memory."""
