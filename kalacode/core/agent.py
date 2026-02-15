@@ -4,6 +4,11 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
+try:
+    import readline
+except ImportError:
+    readline = None
+
 from ..core import LLMClient
 from ..memory import LongTermMemory, MemoryConfig, ShortTermMemory
 from ..tools import ToolRegistry
@@ -269,9 +274,140 @@ class AgentRunner:
     def __init__(self, agent: Agent, display: Display):
         self.agent = agent
         self.display = display
+        self.command_help: Dict[str, str] = {
+            "/help": "Show available commands",
+            "/commands": "Show available commands",
+            "/q": "Quit the application",
+            "/quit": "Quit the application",
+            "exit": "Quit the application",
+            "/c": "Clear conversation history",
+            "/stats": "Show short-term memory stats",
+            "/memory show": "Display long-term memory markdown file",
+            "/memory clear": "Reset long-term memory markdown file",
+        }
+
+    def _setup_command_completion(self) -> None:
+        """Enable slash-command completion when readline is available."""
+        if readline is None:
+            return
+        try:
+            readline.parse_and_bind("tab: complete")
+            readline.set_completer_delims("")
+            readline.set_completer(self._command_completer)
+        except Exception:
+            # Completion is a UX enhancement; ignore setup failures.
+            pass
+
+    def _command_completer(self, text: str, state: int) -> Optional[str]:
+        """Readline completer for slash commands and subcommands."""
+        if readline is None:
+            return None
+        buffer = readline.get_line_buffer() or ""
+        stripped = buffer.strip()
+        if not stripped.startswith("/") and stripped != "exit":
+            return None
+
+        candidates = sorted(
+            command
+            for command in self.command_help
+            if command.startswith(stripped) and command.startswith("/")
+        )
+        if not candidates and stripped == "/memory":
+            candidates = ["/memory show", "/memory clear"]
+        if state < len(candidates):
+            return candidates[state]
+        return None
+
+    def _show_commands(self) -> None:
+        """Print command reference."""
+        self.display.info("Commands:", color="cyan")
+        for command, description in self.command_help.items():
+            if command == "exit":
+                continue
+            print(f"  {command:<14} {description}")
+        print("  exit           Quit the application")
+
+    def _suggest_commands(self, user_input: str) -> None:
+        """Suggest matching commands for unknown slash input."""
+        candidates = [
+            command
+            for command in self.command_help
+            if command.startswith(user_input) and command.startswith("/")
+        ]
+        self.display.info(f"Unknown command: {user_input}", color="yellow")
+        if candidates:
+            self.display.info("Did you mean:", color="cyan")
+            for command in sorted(set(candidates)):
+                print(f"  {command}")
+        else:
+            self.display.info("Use /help to list available commands.", color="cyan")
+
+    def _handle_command(self, user_input: str) -> str:
+        """
+        Handle slash commands.
+
+        Returns:
+            - "continue": command handled, continue loop
+            - "break": exit loop
+            - "unknown": unrecognized slash command
+        """
+        if user_input in ("/q", "/quit", "exit"):
+            return "break"
+
+        if user_input in ("/help", "/commands"):
+            self._show_commands()
+            return "continue"
+
+        if user_input == "/c":
+            self.agent.reset_conversation()
+            self.display.info("Cleared conversation")
+            return "continue"
+
+        if user_input == "/stats":
+            stats = self.agent.get_memory_stats()
+            if stats:
+                self.display.info(
+                    f"Memory: {stats['message_count']} messages, "
+                    f"{stats['token_count']} tokens "
+                    f"(max: {stats['max_messages']} msgs, {stats['max_tokens']} tokens)"
+                )
+            else:
+                self.display.info("Short-term memory disabled")
+            return "continue"
+
+        if user_input == "/memory":
+            self.display.info("Memory commands: /memory show | /memory clear", color="cyan")
+            return "continue"
+
+        if user_input == "/memory show":
+            if not self.agent.ltm:
+                self.display.info("Long-term memory disabled", color="yellow")
+                return "continue"
+            self.display.info(
+                f"Long-term memory file: {self.agent.ltm.file_path}",
+                color="cyan",
+            )
+            print(self.agent.ltm.read())
+            return "continue"
+
+        if user_input == "/memory clear":
+            if not self.agent.ltm:
+                self.display.info("Long-term memory disabled", color="yellow")
+                return "continue"
+            self.agent.ltm.clear()
+            self.display.info("Long-term memory cleared", color="cyan")
+            return "continue"
+
+        if user_input.startswith("/"):
+            self._suggest_commands(user_input)
+            return "unknown"
+
+        return "unknown"
 
     def run(self) -> None:
         """Run the main REPL loop."""
+        self._setup_command_completion()
+
         # Show landing page with ASCII logo
         provider_info = "azure" if self.agent.llm.base_url else "openai"
         self.display.show_landing_page(self.agent.llm.model, provider_info)
@@ -300,45 +436,12 @@ class AgentRunner:
                 if not user_input:
                     continue
 
-                # Handle commands
-                if user_input in ("/q", "/quit", "exit"):
-                    break
-
-                if user_input == "/c":
-                    self.agent.reset_conversation()
-                    self.display.info("Cleared conversation")
-                    continue
-
-                if user_input == "/stats":
-                    stats = self.agent.get_memory_stats()
-                    if stats:
-                        self.display.info(
-                            f"Memory: {stats['message_count']} messages, "
-                            f"{stats['token_count']} tokens "
-                            f"(max: {stats['max_messages']} msgs, {stats['max_tokens']} tokens)"
-                        )
-                    else:
-                        self.display.info("Short-term memory disabled")
-                    continue
-
-                if user_input == "/memory show":
-                    if not self.agent.ltm:
-                        self.display.info("Long-term memory disabled", color="yellow")
+                if user_input.startswith("/") or user_input == "exit":
+                    action = self._handle_command(user_input)
+                    if action == "break":
+                        break
+                    if action in ("continue", "unknown"):
                         continue
-                    self.display.info(
-                        f"Long-term memory file: {self.agent.ltm.file_path}",
-                        color="cyan",
-                    )
-                    print(self.agent.ltm.read())
-                    continue
-
-                if user_input == "/memory clear":
-                    if not self.agent.ltm:
-                        self.display.info("Long-term memory disabled", color="yellow")
-                        continue
-                    self.agent.ltm.clear()
-                    self.display.info("Long-term memory cleared", color="cyan")
-                    continue
 
                 # Process user input
                 self.agent.process_user_input(user_input)
