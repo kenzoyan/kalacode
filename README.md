@@ -7,6 +7,9 @@ A minimal, well-organized coding agent with Azure OpenAI support - inspired by n
 - Clean, modular architecture
 - OpenAI SDK with Azure OpenAI support
 - ReAct-style tool-using loop (Think -> Act -> Observe -> Respond)
+- Short-term memory with truncation safeguards for tool-call sequencing
+- Long-term memory persisted in a standalone markdown file
+- Durable memory extraction (facts/preferences/decisions only)
 - File manipulation tools (read, write, edit)
 - Search capabilities (glob, grep)
 - Shell command execution
@@ -25,6 +28,11 @@ kalacode/
 │   │   ├── __init__.py
 │   │   ├── llm_client.py    # OpenAI/Azure client
 │   │   └── agent.py         # Agent orchestration
+│   ├── memory/
+│   │   ├── __init__.py
+│   │   ├── config.py        # Memory configuration
+│   │   ├── short_term.py    # Sliding-window short-term memory
+│   │   └── long_term.py     # Markdown long-term memory
 │   ├── tools/
 │   │   ├── __init__.py
 │   │   ├── base.py          # Tool base classes
@@ -34,8 +42,8 @@ kalacode/
 │   └── ui/
 │       ├── __init__.py
 │       └── display.py       # Terminal UI
+├── .kalacode_memory.md
 ├── requirements.txt
-├── setup.py
 ├── .env.example
 └── README.md
 ```
@@ -47,8 +55,9 @@ kalacode/
 ```bash
 git clone <your-repo-url>
 cd kalacode
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+python3.13 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
@@ -83,24 +92,12 @@ OPENAI_API_KEY=sk-your-openai-api-key
 OPENAI_MODEL=gpt-4
 ```
 
-### 3. Install the package (optional)
-
-```bash
-pip install -e .
-```
-
 ## Usage
 
 ### Run directly:
 
 ```bash
 python -m kalacode
-```
-
-### Or if installed:
-
-```bash
-kalacode
 ```
 
 ### Available commands:
@@ -120,6 +117,20 @@ kalacode
 | `OPENAI_API_KEY` | API key (Azure or OpenAI) | - |
 | `OPENAI_BASE_URL` | Base URL (set for Azure, unset for OpenAI) | None |
 | `OPENAI_MODEL` | Model/deployment name | `gpt-4` |
+| `KALACODE_ENABLE_STM` | Enable short-term memory | `true` |
+| `KALACODE_MAX_CONTEXT_TOKENS` | STM token budget | `100000` |
+| `KALACODE_MAX_RECENT_MESSAGES` | STM message window size | `20` |
+| `KALACODE_ENABLE_LTM` | Enable long-term markdown memory | `true` |
+| `KALACODE_LTM_FILE` | LTM markdown file path | `.kalacode_memory.md` |
+| `KALACODE_LTM_MAX_SUMMARY_CHARS` | Max LTM chars injected in prompt | `2000` |
+| `KALACODE_LTM_MAX_ENTRIES` | Max timestamped LTM entries retained | `500` |
+
+## Memory Behavior
+
+- Short-term memory keeps recent context and sanitizes invalid tool-message sequences after truncation.
+- Long-term memory is stored in markdown and injected as bounded context.
+- Only durable items are saved to LTM: facts, preferences, and decisions.
+- Use `/memory show` and `/memory clear` to inspect/reset LTM.
 
 ## Available Tools
 
