@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +16,7 @@ class LongTermMemory:
     file_path: Path
     max_summary_chars: int = 2000
     max_entries: int = 500
+    dedup_threshold: float = 0.82
 
     def __post_init__(self) -> None:
         self.file_path = Path(self.file_path)
@@ -61,6 +63,66 @@ class LongTermMemory:
         if len(text) <= self.max_summary_chars:
             return text
         return text[-self.max_summary_chars :]
+
+    def store_items(self, items: list[str]) -> None:
+        """Persist a list of pre-extracted memory strings to the markdown file.
+
+        Performs fuzzy deduplication against existing entries before writing.
+        Items are stored as plain bullets (no [KIND] prefix).
+        Called by Agent after LLM-based extraction.
+        """
+        if not items:
+            return
+
+        existing_texts = self._existing_item_texts()
+        unique_items = [
+            item for item in items
+            if not self._is_fuzzy_duplicate(item, existing_texts)
+        ]
+        if not unique_items:
+            return
+
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+        lines = [f"\n### {ts}"]
+        for item in unique_items:
+            lines.append(f"- {item}")
+        entry = "\n".join(lines) + "\n"
+        self.file_path.write_text(self.read() + entry, encoding="utf-8")
+        self._trim_entries()
+
+    def _existing_item_texts(self) -> list[str]:
+        """Return normalized text of all stored items for fuzzy comparison.
+
+        Handles both legacy tagged format (- [KIND] text) and plain format (- text).
+        """
+        text = self.read()
+        items: list[str] = []
+
+        # Legacy tagged format: - [FACT] text, - [PREFERENCE] text, - [DECISION] text
+        for _, item_text in re.findall(
+            r"^- \[(FACT|PREFERENCE|DECISION)\] (.+)$", text, re.MULTILINE
+        ):
+            items.append(" ".join(item_text.lower().split()))
+
+        # New plain format: lines starting with "- " that are not tagged
+        for item_text in re.findall(
+            r"^- (?!\[(?:FACT|PREFERENCE|DECISION)\])(.+)$", text, re.MULTILINE
+        ):
+            items.append(" ".join(item_text.lower().split()))
+
+        return items
+
+    def _is_fuzzy_duplicate(self, candidate: str, existing_texts: list[str]) -> bool:
+        """Return True if candidate is similar enough to any existing item.
+
+        Uses difflib.SequenceMatcher with normalized strings.
+        """
+        normalized = " ".join(candidate.lower().split())
+        for existing in existing_texts:
+            ratio = difflib.SequenceMatcher(None, normalized, existing).ratio()
+            if ratio >= self.dedup_threshold:
+                return True
+        return False
 
     def append_turn(self, user_text: str, assistant_text: str) -> None:
         """Append only durable memory items extracted from a conversation turn."""

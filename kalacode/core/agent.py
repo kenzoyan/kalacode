@@ -45,6 +45,7 @@ class Agent:
                 file_path=self.memory_config.ltm_file_path,
                 max_summary_chars=self.memory_config.ltm_max_summary_chars,
                 max_entries=self.memory_config.ltm_max_entries,
+                dedup_threshold=self.memory_config.ltm_dedup_threshold,
             )
         else:
             self.ltm = None
@@ -110,13 +111,56 @@ class Agent:
         if self.stm:
             self.stm.add_message(message)
 
+    def _extract_ltm_items(self, user_input: str, assistant_output: str) -> list[str]:
+        """Use the LLM to extract durable memory items from a completed turn.
+
+        Returns a list of plain strings to persist. Returns [] on any failure
+        so the caller can fall back to the heuristic path.
+        """
+        messages_text = f"User: {user_input}\nAssistant: {assistant_output}"
+        prompt = (
+            "You are a memory extractor. Given these messages from a coding session, "
+            "extract any facts, preferences, or decisions worth remembering long-term.\n\n"
+            "Rules:\n"
+            "- Only extract durable information (preferences, decisions, constraints, learned facts)\n"
+            "- Skip transient info (errors, running commands, greetings, intermediate states)\n"
+            "- Format as a bulleted list, one item per line, starting with \"- \"\n"
+            "- Return empty if nothing is worth saving\n"
+            "- Keep each item under 150 characters\n\n"
+            f"Messages:\n{messages_text}"
+        )
+        response = self.llm.chat_completion(
+            messages=[{"role": "user", "content": prompt}],
+            tools=None,
+            stream=False,
+            temperature=0.0,
+            max_completion_tokens=512,
+        )
+        raw = response.get("content", "")
+        items: list[str] = []
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("- "):
+                item = stripped[2:].strip()
+                if item:
+                    items.append(item[:150])
+        return items
+
     def _append_to_ltm(self, user_input: str, assistant_output: str) -> None:
-        """Persist completed turn to long-term markdown memory."""
+        """Persist completed turn to long-term markdown memory.
+
+        Primary path: LLM extraction -> store_items.
+        Fallback: heuristic extraction via append_turn.
+        """
         if not self.ltm:
             return
         if not assistant_output.strip():
             return
-        self.ltm.append_turn(user_text=user_input, assistant_text=assistant_output)
+        try:
+            items = self._extract_ltm_items(user_input, assistant_output)
+            self.ltm.store_items(items)
+        except Exception:
+            self.ltm.append_turn(user_text=user_input, assistant_text=assistant_output)
 
     def process_user_input(self, user_input: str) -> None:
         """Process user input and run agentic loop."""

@@ -16,6 +16,7 @@ class MemoryConfig:
     ltm_file_path: str = ".kalacode_memory.md"
     ltm_max_summary_chars: int = 2000
     ltm_max_entries: int = 500
+    ltm_dedup_threshold: float = 0.82
 
     @classmethod
     def from_env(cls) -> "MemoryConfig":
@@ -36,4 +37,7 @@ class MemoryConfig:
                 os.environ.get("KALACODE_LTM_MAX_SUMMARY_CHARS", "2000")
             ),
             ltm_max_entries=int(os.environ.get("KALACODE_LTM_MAX_ENTRIES", "500")),
+            ltm_dedup_threshold=float(
+                os.environ.get("KALACODE_LTM_DEDUP_THRESHOLD", "0.82")
+            ),
         )
