@@ -53,6 +53,9 @@ class Agent:
         # Keep messages list for backward compatibility
         self.messages: List[Dict[str, Any]] = []
 
+        # Buffer of (user_input, assistant_output) pairs flushed to LTM at session end
+        self._ltm_buffer: list[tuple[str, str]] = []
+
     def _default_system_prompt(self) -> str:
         """Get default system prompt."""
         return (
@@ -72,7 +75,8 @@ class Agent:
         )
 
     def reset_conversation(self) -> None:
-        """Clear conversation history."""
+        """Clear conversation history and flush buffered LTM turns."""
+        self.flush_ltm()
         self.messages = []
         if self.stm:
             self.stm.clear()
@@ -111,30 +115,35 @@ class Agent:
         if self.stm:
             self.stm.add_message(message)
 
-    def _extract_ltm_items(self, user_input: str, assistant_output: str) -> list[str]:
-        """Use the LLM to extract durable memory items from a completed turn.
+    def _extract_ltm_items_batch(self, turns: list[tuple[str, str]]) -> list[str]:
+        """Extract durable memory from all buffered session turns in one LLM call.
 
-        Returns a list of plain strings to persist. Returns [] on any failure
-        so the caller can fall back to the heuristic path.
+        Each turn is truncated to keep the prompt manageable. Returns [] on failure.
         """
-        messages_text = f"User: {user_input}\nAssistant: {assistant_output}"
+        TURN_LIMIT = 400
+        formatted: list[str] = []
+        for i, (user, assistant) in enumerate(turns, 1):
+            u = user[:TURN_LIMIT] + ("..." if len(user) > TURN_LIMIT else "")
+            a = assistant[:TURN_LIMIT] + ("..." if len(assistant) > TURN_LIMIT else "")
+            formatted.append(f"Turn {i}:\nUser: {u}\nAssistant: {a}")
+        session_text = "\n\n".join(formatted)
         prompt = (
-            "You are a memory extractor. Given these messages from a coding session, "
-            "extract any facts, preferences, or decisions worth remembering long-term.\n\n"
+            "You are a memory extractor. Given this coding session, extract any facts, "
+            "preferences, or decisions worth remembering long-term.\n\n"
             "Rules:\n"
             "- Only extract durable information (preferences, decisions, constraints, learned facts)\n"
             "- Skip transient info (errors, running commands, greetings, intermediate states)\n"
             "- Format as a bulleted list, one item per line, starting with \"- \"\n"
             "- Return empty if nothing is worth saving\n"
             "- Keep each item under 150 characters\n\n"
-            f"Messages:\n{messages_text}"
+            f"Session:\n{session_text}"
         )
         response = self.llm.chat_completion(
             messages=[{"role": "user", "content": prompt}],
             tools=None,
             stream=False,
             temperature=0.0,
-            max_completion_tokens=512,
+            max_completion_tokens=1024,
         )
         raw = response.get("content", "")
         items: list[str] = []
@@ -146,21 +155,28 @@ class Agent:
                     items.append(item[:150])
         return items
 
-    def _append_to_ltm(self, user_input: str, assistant_output: str) -> None:
-        """Persist completed turn to long-term markdown memory.
+    def flush_ltm(self) -> None:
+        """Extract and persist durable memory from all buffered session turns.
 
-        Primary path: LLM extraction -> store_items.
-        Fallback: heuristic extraction via append_turn.
+        Called at session end (quit or /c). Makes one LLM call for the whole
+        session. Falls back to per-turn heuristic extraction on any failure.
         """
-        if not self.ltm:
-            return
-        if not assistant_output.strip():
+        if not self.ltm or not self._ltm_buffer:
             return
         try:
-            items = self._extract_ltm_items(user_input, assistant_output)
+            items = self._extract_ltm_items_batch(self._ltm_buffer)
             self.ltm.store_items(items)
         except Exception:
-            self.ltm.append_turn(user_text=user_input, assistant_text=assistant_output)
+            for user_input, assistant_output in self._ltm_buffer:
+                self.ltm.append_turn(user_text=user_input, assistant_text=assistant_output)
+        finally:
+            self._ltm_buffer.clear()
+
+    def _append_to_ltm(self, user_input: str, assistant_output: str) -> None:
+        """Buffer this turn for end-of-session LTM extraction."""
+        if not self.ltm or not assistant_output.strip():
+            return
+        self._ltm_buffer.append((user_input, assistant_output))
 
     def process_user_input(self, user_input: str) -> None:
         """Process user input and run agentic loop."""
@@ -496,3 +512,5 @@ class AgentRunner:
                 break
             except Exception as err:
                 self.display.error(str(err))
+
+        self.agent.flush_ltm()
